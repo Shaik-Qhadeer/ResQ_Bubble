@@ -64,7 +64,7 @@ export const createUser = async (req, res) => {
     }
     
     // Validate role
-    const validRoles = ['admin', 'manager', 'staff'];
+    const validRoles = ['admin', 'manager', 'user'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ message: 'Invalid role' });
     }
@@ -134,7 +134,7 @@ export const updateUser = async (req, res) => {
       }
       
       // Validate new role
-      const validRoles = ['admin', 'manager', 'staff'];
+      const validRoles = ['admin', 'manager', 'user'];
       if (!validRoles.includes(role)) {
         return res.status(400).json({ message: 'Invalid role' });
       }

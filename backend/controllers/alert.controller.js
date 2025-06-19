@@ -5,16 +5,49 @@ export const getAgencyAlerts = async (req, res) => {
   try {
     const { agencyId } = req.params;
     
+    console.log('Fetching alerts for agency:', agencyId);
+    
+    // Find alerts where the agency is either the creator or a recipient
     const alerts = await Alert.find({
-      'recipients.agency': agencyId,
-      status: 'active'
+      $or: [
+        { createdBy: agencyId },
+        { 'recipients.agency': agencyId }
+      ]
     })
-      .populate('createdBy', 'name')
-      .sort({ createdAt: -1 });
+    .populate({
+      path: 'createdBy',
+      select: 'name type'
+    })
+    .populate({
+      path: 'sender',
+      select: 'name type'
+    })
+    .populate({
+      path: 'recipients.agency',
+      select: 'name type'
+    })
+    .sort({ createdAt: -1 });
+    
+    console.log(`Found ${alerts.length} alerts for agency ${agencyId}`);
+    console.log('Sample alert:', alerts[0]);
+    
+    // Transform alerts to include read status for this agency
+    const transformedAlerts = alerts.map(alert => {
+      const alertObj = alert.toObject();
+      const recipientInfo = alertObj.recipients.find(
+        r => r.agency._id.toString() === agencyId
+      );
+      
+      return {
+        ...alertObj,
+        isRead: recipientInfo ? recipientInfo.read : false,
+        readAt: recipientInfo ? recipientInfo.readAt : null
+      };
+    });
     
     res.status(200).json({
       success: true,
-      data: alerts
+      data: transformedAlerts
     });
   } catch (error) {
     console.error('Error fetching agency alerts:', error);
@@ -55,6 +88,8 @@ export const getSentAlerts = async (req, res) => {
 
 export const createAlert = async (req, res) => {
   try {
+    console.log('Creating alert with data:', req.body);
+    
     const {
       title,
       message,
@@ -62,13 +97,15 @@ export const createAlert = async (req, res) => {
       coordinates,
       radius,
       expiresAt,
-      recipients
+      recipients = []
     } = req.body;
     
     const agencyId = req.user.agency._id;
+    console.log('Creating alert for agency:', agencyId);
     
     // Validate coordinates
-    if (!Array.isArray(coordinates) || coordinates.length !== 2) {
+    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+      console.log('Invalid coordinates:', coordinates);
       return res.status(400).json({
         success: false,
         message: 'Invalid coordinates format. Must be [longitude, latitude]'
@@ -79,6 +116,7 @@ export const createAlert = async (req, res) => {
     if (typeof longitude !== 'number' || typeof latitude !== 'number' ||
         longitude < -180 || longitude > 180 ||
         latitude < -90 || latitude > 90) {
+      console.log('Invalid coordinate values:', { longitude, latitude });
       return res.status(400).json({
         success: false,
         message: 'Invalid coordinates. Longitude must be between -180 and 180, latitude between -90 and 90'
@@ -87,14 +125,34 @@ export const createAlert = async (req, res) => {
 
     // Validate radius
     if (typeof radius !== 'number' || radius <= 0) {
+      console.log('Invalid radius:', radius);
       return res.status(400).json({
         success: false,
         message: 'Invalid radius. Must be a positive number'
       });
     }
 
+    // Create initial recipients array with creating agency
+    const initialRecipients = [{
+      agency: agencyId,
+      read: true,
+      readAt: new Date()
+    }];
+
+    // Add other specified recipients
+    if (Array.isArray(recipients)) {
+      recipients.forEach(recipientId => {
+        if (recipientId !== agencyId.toString()) {
+          initialRecipients.push({
+            agency: recipientId,
+            read: false
+          });
+        }
+      });
+    }
+
     // Create the alert
-    const alert = new Alert({
+    const alertData = {
       title,
       message,
       severity,
@@ -102,11 +160,17 @@ export const createAlert = async (req, res) => {
       radius,
       expiresAt: new Date(expiresAt),
       createdBy: agencyId,
+      sender: agencyId,
       status: 'active',
-      recipients
-    });
+      recipients: initialRecipients,
+      readBy: [agencyId]
+    };
+
+    console.log('Creating alert with data:', alertData);
+    const alert = new Alert(alertData);
     
     await alert.save();
+    console.log('Alert created successfully:', alert._id);
     
     try {
       // Find nearby agencies based on coordinates and radius
@@ -123,21 +187,38 @@ export const createAlert = async (req, res) => {
         }
       });
       
-      // Add the alert to each nearby agency's alerts
+      console.log(`Found ${nearbyAgencies.length} nearby agencies`);
+      
       if (nearbyAgencies.length > 0) {
-        await Agency.updateMany(
-          { _id: { $in: nearbyAgencies.map(agency => agency._id) } },
-          { $push: { alerts: alert._id } }
-        );
+        // Add nearby agencies to recipients if not already included
+        const existingRecipientIds = new Set(alert.recipients.map(r => r.agency.toString()));
+        const newRecipients = nearbyAgencies
+          .filter(agency => !existingRecipientIds.has(agency._id.toString()))
+          .map(agency => ({
+            agency: agency._id,
+            read: false
+          }));
+        
+        if (newRecipients.length > 0) {
+          alert.recipients.push(...newRecipients);
+          await alert.save();
+          console.log(`Added ${newRecipients.length} nearby agencies as recipients`);
+        }
       }
     } catch (geoError) {
       console.error('Error finding nearby agencies:', geoError);
       // Don't fail the alert creation if geospatial query fails
     }
     
+    // Populate the response data
+    const populatedAlert = await Alert.findById(alert._id)
+      .populate('createdBy', 'name type')
+      .populate('sender', 'name type')
+      .populate('recipients.agency', 'name type');
+    
     res.status(201).json({
       success: true,
-      data: alert,
+      data: populatedAlert,
       message: 'Alert created successfully'
     });
   } catch (error) {
@@ -172,11 +253,28 @@ export const markAlertAsRead = async (req, res) => {
       });
     }
     
-    // Add agency to readBy if not already present
+    // Find the recipient entry for this agency
+    const recipientIndex = alert.recipients.findIndex(
+      r => r.agency.toString() === agencyId.toString()
+    );
+    
+    if (recipientIndex === -1) {
+      return res.status(403).json({
+        success: false,
+        message: 'Agency is not a recipient of this alert'
+      });
+    }
+    
+    // Update the read status
+    alert.recipients[recipientIndex].read = true;
+    alert.recipients[recipientIndex].readAt = new Date();
+    
+    // Add to readBy if not already present
     if (!alert.readBy.includes(agencyId)) {
       alert.readBy.push(agencyId);
-      await alert.save();
     }
+    
+    await alert.save();
     
     res.status(200).json({
       success: true,

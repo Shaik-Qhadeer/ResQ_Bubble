@@ -43,34 +43,46 @@ const alertSchema = new mongoose.Schema({
     ref: 'Agency',
     required: true
   },
+  sender: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Agency',
+    required: true
+  },
   status: {
     type: String,
     enum: ['active', 'inactive'],
     default: 'active'
   },
-  readBy: [
-    {
+  recipients: [{
+    agency: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Agency'
-    }
-  ],
+      ref: 'Agency',
+      required: true
+    },
+    read: {
+      type: Boolean,
+      default: false
+    },
+    readAt: Date
+  }],
+  readBy: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Agency'
+  }],
   expiresAt: {
     type: Date,
     required: [true, 'Alert expiration date is required']
-  },
-  recipients: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Agency',
-  }]
+  }
 }, {
   timestamps: true
 });
 
-// Create 2dsphere index for geospatial queries
+// Create indexes for better query performance
+alertSchema.index({ createdBy: 1 });
+alertSchema.index({ 'recipients.agency': 1 });
+alertSchema.index({ status: 1 });
+alertSchema.index({ expiresAt: 1 });
 alertSchema.index({ coordinates: '2dsphere' });
-
-// TTL index to auto-delete expired alerts
-alertSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const Alert = mongoose.model('Alert', alertSchema);
 

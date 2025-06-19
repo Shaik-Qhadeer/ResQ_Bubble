@@ -11,6 +11,7 @@ import messageRoutes from './routes/message.routes.js';
 import alertRoutes from './routes/alert.routes.js';
 import borrowRoutes from './routes/borrow.routes.js';
 import userRoutes from './routes/user.routes.js';
+import transferRoutes from './routes/transfer.routes.js';
 
 // Get the directory name
 const __filename = fileURLToPath(import.meta.url);
@@ -86,6 +87,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/borrow', borrowRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/transfers', transferRoutes);
 
 // Root route
 app.get('/', (req, res) => {
